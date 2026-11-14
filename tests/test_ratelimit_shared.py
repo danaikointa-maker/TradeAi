@@ -188,13 +188,14 @@ def test_unknown_store_is_refused_not_guessed():
 
 
 # --------------------------------------------------------- several processes, one file
-def _spend_many(path: str, attempts: int, start_at: float, out: list) -> None:
+def _spend_many(path: str, attempts: int, start_at: float, out) -> None:
     """Child process: hammer one bucket with a frozen clock so nothing refills."""
     store = SqliteBucketStore(path)
     limiter = RateLimiter({"probe": {"limit": 40, "window_seconds": 3600}},
                           store=store, clock=lambda: start_at)
     allowed = sum(1 for _ in range(attempts) if limiter.check("ip:198.51.100.9", "probe")[0])
-    out.append(allowed)
+    out.send(allowed)
+    out.close()
     store.close()
 
 
@@ -203,15 +204,29 @@ def test_four_processes_cannot_spend_more_than_the_limit(tmp_path):
     db = str(tmp_path / "shared.sqlite3")
     SqliteBucketStore(db).close()          # create the schema before the race
     ctx = mp.get_context("spawn")          # closest to separate uvicorn workers
-    with ctx.Manager() as manager:
-        out = manager.list()
-        procs = [ctx.Process(target=_spend_many, args=(db, 20, 1000.0, out)) for _ in range(4)]
+    # A one-way OS pipe avoids a Manager's socket listener (restricted in some
+    # runners) while still racing four independent spawned SQLite clients.
+    pipes = [ctx.Pipe(duplex=False) for _ in range(4)]
+    procs = [ctx.Process(target=_spend_many, args=(db, 20, 1000.0, send))
+             for _, send in pipes]
+    try:
         for p in procs:
             p.start()
+        for _, send in pipes:
+            send.close()
         for p in procs:
             p.join(timeout=60)
         assert all(p.exitcode == 0 for p in procs), "a worker crashed"
-        assert sum(out) == 40, f"limit 40 was handed out {sum(out)} times"
+        allowed = [recv.recv() for recv, _ in pipes]
+        assert sum(allowed) == 40, f"limit 40 was handed out {sum(allowed)} times"
+    finally:
+        for recv, send in pipes:
+            recv.close()
+            send.close()
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=5)
     conn = sqlite3.connect(db)
     tokens = conn.execute("SELECT tokens FROM buckets").fetchone()[0]
     conn.close()

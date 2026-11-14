@@ -11,6 +11,7 @@ import math
 import time
 from typing import Any
 
+from packages.market_structure.archived_candle_audit import audit_archived_candles
 from packages.persistence.db import Database
 from packages.shared_schemas.models import Position
 
@@ -38,7 +39,8 @@ class PositionCandleLog:
             if not isinstance(bar, dict) or set(bar) != {"t", "o", "h", "l", "c", "v"}:
                 raise ValueError("invalid observed candle structure")
             stamp = bar["t"]
-            if not isinstance(stamp, int) or isinstance(stamp, bool):
+            if (not isinstance(stamp, int) or isinstance(stamp, bool)
+                    or stamp < 0 or stamp % self.TIMEFRAME_SECONDS):
                 raise ValueError("invalid observed candle timestamp")
             prices = (bar["o"], bar["h"], bar["l"], bar["c"], bar["v"])
             if any(isinstance(value, bool) or not isinstance(value, (int, float))
@@ -106,4 +108,8 @@ class PositionCandleLog:
                                   "captured_at": row["captured_at"]})
             except (TypeError, KeyError, ValueError, AttributeError):
                 return empty
-        return {**empty, "bars": collected}
+        try:
+            continuity = audit_archived_candles(collected, timeframe_seconds=self.TIMEFRAME_SECONDS)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return empty  # corrupt evidence must not be presented as validated continuity
+        return {**empty, "bars": collected, "continuity": continuity}

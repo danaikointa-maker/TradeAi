@@ -39,10 +39,29 @@ def test_closed_recent_bars_only_no_future_open_bar_or_posthoc_backfill(candles)
                           symbol="XAUUSD")
     assert [row["t"] for row in rows["bars"]] == [600, 900]
     assert not rows["broker_tick_verified"] and not rows["complete"]
+    assert rows["continuity"]["observed_bars"] == 2
+    assert rows["continuity"]["observed_contiguous"] is True
+    assert rows["continuity"]["complete"] is False
     assert all(row["t"] + 300 <= 1400 for row in rows["bars"])
     assert log.capture(position=position(), account_identity=owner, bars=observed,
                        market_time=1400, feed_mode="replay") == 0
     assert db.query("SELECT count(*) AS n FROM position_candles")[0]["n"] == 2
+
+
+def test_archived_candle_gap_is_visible_and_does_not_certify_broker_history(candles):
+    log, _, owner = candles
+    assert log.capture(position=position(), account_identity=owner,
+                       bars=[bar(600), bar(1200)], market_time=1550,
+                       feed_mode="replay") == 2
+    archive = log.for_ticket(broker_id="demo", ticket="C-1",
+                             account_identity=owner, symbol="XAUUSD")
+    assert [row["t"] for row in archive["bars"]] == [600, 1200]
+    assert archive["continuity"]["gaps"] == [
+        {"after_open_utc": 600, "before_open_utc": 1200, "missing_bars": 1},
+    ]
+    assert archive["continuity"]["observed_contiguous"] is False
+    assert archive["continuity"]["complete"] is False
+    assert archive["continuity"]["broker_tick_verified"] is False
 
 
 def test_conflicts_rollback_and_immutable_triggers(candles):
@@ -79,7 +98,8 @@ def test_cross_account_and_wrong_symbol_never_show_foreign_bars(candles):
 
 
 @pytest.mark.parametrize("invalid", [bar(600, h=1990), bar(600, c=float("nan")),
-                                     bar(600, t=True), bar(600, v=-1)])
+                                     bar(600, t=True), bar(600, v=-1),
+                                     bar(601), bar(-300)])
 def test_invalid_ohlc_fails_closed(candles, invalid):
     log, db, owner = candles
     with pytest.raises(ValueError):

@@ -68,6 +68,7 @@
                             :snapshot="openReview.original_plan_snapshot?.original_signal"
                             :analysis="openReview.original_plan_snapshot?.analysis"
                             :post-entry="openReview.post_entry_candles" />
+        <ArchivedCandleContinuity :archive="openReview.post_entry_candles" />
         <TradeLevels :key="`open-levels-${openReview.position.ticket}`" :trade="openReview.position"
                      :snapshot="openReview.original_plan_snapshot?.original_signal"
                      :analysis="openReview.original_plan_snapshot?.analysis" />
@@ -136,6 +137,7 @@
                             :trade="review.trade" :snapshot="review.entry_snapshot"
                             :analysis="review.original_plan_snapshot?.analysis"
                             :post-entry="review.post_entry_candles" />
+        <ArchivedCandleContinuity class="md:col-span-2" :archive="review.post_entry_candles" />
         <TradeLevels class="md:col-span-2" :key="selectedTrade.ticket"
                      :trade="review.trade" :snapshot="review.entry_snapshot"
                      :analysis="review.original_plan_snapshot?.analysis" />
@@ -213,6 +215,7 @@ import PositionsTable from '../components/PositionsTable.vue'
 import Stat from '../components/Stat.vue'
 import TradeLevels from '../components/TradeLevels.vue'
 import ArchivedTradeChart from '../components/ArchivedTradeChart.vue'
+import ArchivedCandleContinuity from '../components/ArchivedCandleContinuity.vue'
 import { api } from '../lib/api'
 import { datetime, fmt, fmtFactor, money, pct } from '../lib/format'
 import { permissions, positions, toast } from '../lib/store'
