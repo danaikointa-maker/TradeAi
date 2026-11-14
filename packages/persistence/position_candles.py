@@ -11,6 +11,7 @@ import math
 import time
 from typing import Any
 
+from packages.market_structure.archived_candle_audit import audit_archived_candles
 from packages.persistence.db import Database
 from packages.shared_schemas.models import Position
 
@@ -106,4 +107,8 @@ class PositionCandleLog:
                                   "captured_at": row["captured_at"]})
             except (TypeError, KeyError, ValueError, AttributeError):
                 return empty
-        return {**empty, "bars": collected}
+        try:
+            continuity = audit_archived_candles(collected, timeframe_seconds=self.TIMEFRAME_SECONDS)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return empty  # corrupt evidence must not be presented as validated continuity
+        return {**empty, "bars": collected, "continuity": continuity}
