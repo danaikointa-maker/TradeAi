@@ -39,7 +39,8 @@ class PositionCandleLog:
             if not isinstance(bar, dict) or set(bar) != {"t", "o", "h", "l", "c", "v"}:
                 raise ValueError("invalid observed candle structure")
             stamp = bar["t"]
-            if not isinstance(stamp, int) or isinstance(stamp, bool):
+            if (not isinstance(stamp, int) or isinstance(stamp, bool)
+                    or stamp < 0 or stamp % self.TIMEFRAME_SECONDS):
                 raise ValueError("invalid observed candle timestamp")
             prices = (bar["o"], bar["h"], bar["l"], bar["c"], bar["v"])
             if any(isinstance(value, bool) or not isinstance(value, (int, float))
