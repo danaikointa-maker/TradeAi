@@ -122,3 +122,30 @@ def test_close_and_netting_reversal_cannot_inflate_open_order_fill(ledger, entry
     assert result["deal_ids"] == ["1"]
     assert result["ignored_non_opening_ids"] == ["2"]
     assert result["auto_resolved"] is False
+
+
+def test_one_order_multiple_broker_positions_requires_manual_reconciliation(ledger):
+    service, _ = ledger
+    service.ingest("demo", "Demo-Server:123", [
+        deal("1", order_id="shared-order", position_id="position-a", volume=0.04),
+        deal("2", order_id="shared-order", position_id="position-b", volume=0.06),
+    ])
+    result = service.order_evidence("demo", "Demo-Server:123", "shared-order",
+                                    "XAUUSD", "buy", 0.1)
+    assert result["status"] == "ambiguous_multiple_positions"
+    assert result["position_ids"] == ["position-a", "position-b"]
+    assert result["volume"] == pytest.approx(0.1)
+    assert result["auto_resolved"] is False
+
+
+def test_multiple_fragments_same_position_still_aggregate_without_approval(ledger):
+    service, _ = ledger
+    service.ingest("demo", "Demo-Server:123", [
+        deal("1", order_id="same-order", position_id="position-a", volume=0.04),
+        deal("2", order_id="same-order", position_id="position-a", volume=0.06),
+    ])
+    result = service.order_evidence("demo", "Demo-Server:123", "same-order",
+                                    "XAUUSD", "buy", 0.1)
+    assert result["status"] == "full"
+    assert result["position_ids"] == ["position-a"]
+    assert result["auto_resolved"] is False
