@@ -127,11 +127,10 @@ class ExecutionGateway:
                     raise ValueError("result identity mismatch")
             except (ValueError, TypeError) as exc:
                 raise BrokerError("idempotency result invalid; manual reconciliation required") from exc
-        if existing["state"] not in (OrderState.filled.value, OrderState.closed.value,
-                                     OrderState.cancelled.value, OrderState.rejected.value):
-            recovered = self._verify_existing(adapter, request.idempotency_key)
-            if recovered is not None:
-                return recovered
+        # A position sharing signal_id, symbol and volume is NOT proof that
+        # this particular order reached the broker. It could predate the send
+        # or belong to another EA. Keep the persisted unknown outcome until
+        # authoritative broker order/deal IDs can be reconciled explicitly.
         self.db.audit(actor, "order.idempotent_hit", {"key": request.idempotency_key})
         return result or OrderResult(
             order_id=existing["id"], idempotency_key=request.idempotency_key,
@@ -246,11 +245,17 @@ class ExecutionGateway:
             self._assert_account(adapter)
             result.order_id = order_id
             result.idempotency_key = key
-            if self.verify_after_send and result.status == OrderState.filled:
-                result.verified = self._verify_fill(adapter, result, request)
-                self._assert_account(adapter)
-                if not result.verified:
-                    result.message += " | fill evidence missing or mismatched (manual reconciliation required)"
+            if result.status == OrderState.filled:
+                if self.verify_after_send:
+                    result.verified = self._verify_fill(adapter, result, request)
+                    self._assert_account(adapter)
+                    if not result.verified:
+                        result.message += " | fill evidence missing or mismatched (manual reconciliation required)"
+                else:
+                    # A bridge's optimistic verified flag cannot override the
+                    # local verification gate simply because it was disabled.
+                    result.verified = False
+                    result.message += " | fill verification disabled (manual reconciliation required)"
             self._persist_result(order_id, result, request)
             self.db.audit(actor, "order.result", result.model_dump())
             return result
@@ -262,15 +267,11 @@ class ExecutionGateway:
             last_error = f"unexpected: {exc}"
             self.db.audit(actor, "order.error", {"error": last_error, "resent": False})
 
-        recovered = self._verify_existing(adapter, key)
-        if recovered is not None:
-            self.db.audit(actor, "order.recovered", {"key": key, "ticket": recovered.ticket})
-            return recovered
-
         result = OrderResult(
             order_id=order_id, idempotency_key=key, status=OrderState.pending,
             message=(f"order not confirmed: {last_error} | not resent automatically — "
-                     f"manual reconciliation required; do not retry with a new key"),
+                     f"broker order/deal identity must be reconciled manually; "
+                     f"do not retry with a new key"),
             created_at=time.time(),
         )
         self._persist_result(order_id, result, request)
@@ -314,42 +315,6 @@ class ExecutionGateway:
             )
         except Exception:  # noqa: BLE001
             return False
-
-    def _verify_existing(self, adapter: BrokerAdapter, key: str) -> OrderResult | None:
-        """Reconcile an order whose send outcome was unknown (timeout/network)."""
-        try:
-            self._assert_account(adapter)
-            positions = adapter.positions()
-            self._assert_account(adapter)
-        except Exception:  # noqa: BLE001
-            return None
-        row = self.db.query_one("SELECT * FROM orders WHERE idempotency_key = ?", (key,))
-        if not row:
-            return None
-        try:
-            payload = json.loads(row["payload"] or "{}")
-        except json.JSONDecodeError:
-            return None
-        request = payload.get("request") or {}
-        signal_id = request.get("signal_id")
-        matches = [pos for pos in positions
-                   if signal_id and pos.signal_id == signal_id
-                   and pos.broker_id == adapter.id == row["broker_id"]
-                   and pos.symbol == request.get("symbol")
-                   and pos.direction == (Direction.up if request.get("side") == "buy" else Direction.down)
-                   and math.isclose(pos.volume, float(request.get("volume", 0)), rel_tol=1e-9, abs_tol=1e-9)
-                   and pos.volume > 0 and math.isfinite(pos.entry) and pos.entry > 0]
-        if len(matches) == 1:
-            pos = matches[0]
-            result = OrderResult(
-                order_id=row["id"], idempotency_key=key, status=OrderState.filled,
-                message="recovered by reconciliation (order was already live at the broker)",
-                ticket=pos.ticket, filled_volume=pos.volume, fill_price=pos.entry,
-                verified=True, created_at=time.time(),
-            )
-            self._persist_result(row["id"], result, OrderRequest(**request))
-            return result
-        return None
 
     # ------------------------------------------------------------ management
     def modify(self, adapter: BrokerAdapter, ticket: str, sl: float | None = None,

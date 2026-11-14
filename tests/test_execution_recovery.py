@@ -120,16 +120,53 @@ def test_same_signal_on_different_position_is_not_recovered(execution, patch):
     assert adapter.order_send.call_count == 1
 
 
-def test_matching_position_recovers_without_resend(execution):
+def test_matching_signal_only_is_not_a_verified_broker_order(execution):
     settings, db, adapter, request, _ = execution
     gateway = ExecutionGateway(settings, db)
     first = gateway.submit(adapter, request)
     adapter.positions.return_value = [recovered_position(adapter)]
     result = ExecutionGateway(settings, db).submit(adapter, request)
-    assert result.status == OrderState.filled
-    assert result.verified
+    assert result.status == OrderState.pending
+    assert not result.verified
     assert result.order_id == first.order_id
+    assert gateway.unresolved_orders(adapter.id)
+    with pytest.raises(BrokerError, match="unresolved"):
+        gateway.submit(adapter, request.model_copy(update={"idempotency_key": "new-key"}))
     assert adapter.order_send.call_count == 1
+
+
+def test_foreign_same_signal_position_before_send_cannot_certify_timeout(execution):
+    settings, db, adapter, request, _ = execution
+    # The position already existed before No7 attempted this request; equality
+    # of its signal metadata is therefore not a unique broker-order link.
+    adapter.positions.return_value = [recovered_position(adapter)]
+    gateway = ExecutionGateway(settings, db)
+    result = gateway.submit(adapter, request)
+    assert result.status == OrderState.pending
+    assert "broker order/deal identity" in result.message
+    assert gateway.unresolved_orders(adapter.id)
+    assert adapter.order_send.call_count == 1
+
+
+def test_broker_filled_then_timeout_remains_unknown_after_restart(execution):
+    settings, db, adapter, request, path = execution
+
+    def fill_without_receipt(*args, **kwargs):
+        adapter.positions.return_value = [recovered_position(adapter)]
+        raise BrokerError("connection lost after order reached server")
+
+    adapter.order_send.side_effect = fill_without_receipt
+    first = ExecutionGateway(settings, db).submit(adapter, request)
+    reopened = Database(path)
+    try:
+        after_restart = ExecutionGateway(settings, reopened).submit(adapter, request)
+        assert first.status == after_restart.status == OrderState.pending
+        assert first.order_id == after_restart.order_id
+        assert reopened.query_one("SELECT state FROM orders")["state"] == "pending"
+        assert ExecutionGateway(settings, reopened).unresolved_orders(adapter.id)
+        assert adapter.order_send.call_count == 1
+    finally:
+        reopened.close()
 
 
 def test_two_connections_claim_key_once(execution):
@@ -252,6 +289,25 @@ def test_immediate_matching_fill_is_verified(execution):
     )
     adapter.positions.return_value = [recovered_position(adapter)]
     assert ExecutionGateway(settings, db).submit(adapter, request).verified
+
+
+def test_disabled_fill_verification_cannot_trust_adapter_verified_flag(execution):
+    settings, db, adapter, request, _ = execution
+    settings.execution["verify_after_send"] = False
+    adapter.order_send.side_effect = None
+    adapter.order_send.return_value = OrderResult(
+        order_id="adapter-id", idempotency_key="key-1", status=OrderState.filled,
+        ticket="ticket-1", filled_volume=0.1, fill_price=2000, verified=True,
+    )
+    gateway = ExecutionGateway(settings, db)
+    result = gateway.submit(adapter, request)
+    assert result.status == OrderState.filled
+    assert not result.verified
+    assert "verification disabled" in result.message
+    assert gateway.unresolved_orders(adapter.id)
+    with pytest.raises(BrokerError, match="unresolved"):
+        gateway.submit(adapter, request.model_copy(update={"idempotency_key": "new-key"}))
+    adapter.order_send.assert_called_once()
 
 
 @pytest.mark.parametrize("patch", [{"volume": 0.05}, {"entry": 2001},
