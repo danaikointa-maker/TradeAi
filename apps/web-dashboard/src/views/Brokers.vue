@@ -34,6 +34,22 @@
       </article>
     </div>
 
+    <section v-if="unresolvedOrders.length" class="panel border border-amber-500/50" role="alert">
+      <div class="panel-head">
+        <div class="panel-title text-amber-300">ออเดอร์ที่โบรกเกอร์ยังไม่ยืนยัน</div>
+        <span class="chip chip-warn">WAIT · {{ unresolvedOrders.length }} รายการ</span>
+      </div>
+      <p class="px-4 pt-3 text-[11px] leading-relaxed text-amber-200">
+        ห้ามส่งคำสั่งซ้ำหรือเปิดไม้ใหม่ด้วยคีย์อื่นจนกว่าจะตรวจสอบ Order/Deal ID จากโบรกเกอร์
+        การพบโพซิชันที่มี signal_id หรือ lot ตรงกันยังไม่ใช่หลักฐานยืนยันว่าออเดอร์นี้สำเร็จ
+      </p>
+      <ul class="space-y-1 px-4 py-3 text-[11px] text-slate-200">
+        <li v-for="order in unresolvedOrders" :key="order.id" class="rounded bg-ink-800/60 px-3 py-2">
+          <span class="num">{{ order.id }}</span> · {{ order.symbol }} · {{ order.state }}
+        </li>
+      </ul>
+    </section>
+
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title">Symbol specifications — {{ active }}</div>
@@ -119,6 +135,8 @@ const loading = ref(false)
 
 const healthMap = computed(() => Object.fromEntries(brokers.value.map((b) => [b.id, b.health])))
 const reconcile = computed(() => state.live?.reconcile || null)
+const unresolvedOrders = computed(() => state.live?.account?.broker_id === active.value
+  && Array.isArray(state.live?.unresolved_orders) ? state.live.unresolved_orders : [])
 
 async function load() {
   loading.value = true

@@ -2,9 +2,9 @@
 
 Status: IN PROGRESS. This is a development plan, not a trading-system acceptance or profitability claim.
 Source of truth: this repository's executable code and current tests. Historical docs may be stale.
-Delivery: PR #24, #27 and #28 were merged into `main` after review. The next
-increment is proposed on `feature/smart-entry-v2-historical-replay`; no direct
-push to `main`.
+Delivery: PR #24, #27, #28 and #30 were merged into `main` after review. The
+next increment is proposed on `feature/smart-entry-v2-conservative-recovery`;
+no direct push to `main`.
 
 ## Goal
 Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architecture. Do not replace existing zone, structure, risk, execution, backtest, journal or authentication modules.
@@ -82,11 +82,18 @@ Extend the existing FastAPI / Vue 3 / Lightweight Charts / MT5-adapter architect
 - Management-cycle mirror updates now archive discrepancies and preserve unverified baselines **atomically in one SQLite transaction** before accepting that cycle's cache; rejection cannot silently overwrite the earlier local evidence.
 - No broker observation is labelled as a verified fill or as a human-originated manual change. A broker-missing position keeps its last baseline pending authoritative history. New observations trigger in-app/configured-channel alerts without changing execution permissions or the original plan.
 
-### Current historical-candle follow-up (proposed, not yet MT5 Demo verified)
+### Merged PR #30: historical-candle follow-up (not MT5 Demo verified)
 - Archive M5 candles **only after closing** and **only while an owned management cycle actually sees a matching open position and cached analysis for its symbol** (also covering non-active symbols when their own analysis remains available). Ignore pre-entry, unfinished, future, and >15-minute-old bars; never fill missing periods from a later download. Save observations per broker/ticket/workspace/account with a source and feed-mode label. Append-only SQLite guards preserve the original bars; a conflicting duplicate fails that position's archive transaction.
 - Read-only open/closed order reviews now serve the observed post-entry bars alongside the original frozen decision-time bars. The dashboard colors observed post-entry bars purple and warns that missing periods are unobserved; all historical S/R, flips, Fibonacci, structure and Entry/SL/TP layer switches remain visual-only.
 - Broker deal matching by order ID now counts `entry=in` fragments only. Close (`out`, `out_by`) and netting-reversal (`inout`) fragments cannot inflate a purported opening fill; their presence is reported as ambiguous, never automatically resolved. A complete broker-side reconciliation still needs independent Demo evidence.
 - Archive errors are logged and cannot block protective position management. Position polling and a fresh matching analysis context are required: the archive is **partial**, can have gaps during downtime or when no matching context is refreshed, and is **not** MT5 tick-history proof. The `complete`/`broker_tick_verified` flags remain false.
+
+### Conservative unknown-order recovery follow-up (proposed, not MT5 Demo verified)
+- If the broker send timed out or lost its acknowledgment, a position with matching `signal_id`, side, symbol, and volume is only a **candidate**, not proof that this No7 order was executed. Even a single identical position might already have existed before the send. Remove automatic promotion of such a pending claim to `filled/verified` on retry/restart.
+- Keep the persisted claim pending, reject new keys while unresolved, and never resend automatically. Confirm execution ownership only through a separately implemented, independently reviewed broker order/deal ID reconciliation process. Immediate broker acknowledgements still use the existing explicit fill-verification path; this change does **not** introduce an approval/auto-fill endpoint.
+- Regression tests cover a matching foreign pre-existing position, a broker fill followed by lost receipt, and process restart; software tests do not certify a real MT5 disconnection scenario.
+- Broker Manager displays an explicit WAIT warning with unresolved claim IDs from the already account-scoped live state; the warning is read-only and cannot acknowledge, resend or clear an order.
+- If `verify_after_send` is disabled, a broker adapter's optimistic `verified` flag is forcibly downgraded for `filled` orders. The claim remains unresolved and blocks further orders rather than treating the missing local check as evidence.
 
 ### What is still missing / not production-ready
 - Still missing: independent validation of optional Stochastic veto, **complete broker-verified post-entry candle replay** (especially restart/offline intervals and symbols without cached analysis), attested broker-deal and partial-fill mapping, deterministic terminal disconnection/manual-change acceptance, target-host restore testing, and real-market forward evidence. No terminal access or real dataset was provided in this development environment. **Do not claim LIVE readiness.**

@@ -47,6 +47,15 @@ automated test on synthetic prices. Each item needs time-stamped broker evidence
    exists while the position is observed open; it never blocks protective
    order management.
    No broker tick verification or complete-time-series guarantee is implied.
+10. **Unknown broker-send outcome cannot be auto-resolved by matching a position's
+    `signal_id`, symbol, side, lot and entry alone.** That position might predate
+    the attempted send or belong to another actor. The pending claim survives
+    restart, blocks new idempotency keys, and is never automatically resent.
+    Resolution requires an independent, account-scoped broker order/deal link
+    and operator reconciliation; the tests do not simulate this authorization.
+11. Disabling `verify_after_send` cannot launder an adapter-reported
+    `verified=true` into trusted order ownership. Such a `filled` receipt stays
+    unverified and blocks new orders until separately reconciled.
 
 ## Reproducible backtest evidence (operator run)
 
@@ -87,6 +96,9 @@ automated test on synthetic prices. Each item needs time-stamped broker evidence
 - [ ] Partial fills, commission/swap, close fragments and netting/hedging reviewed.
 - [ ] Disconnect **before** and **after** broker acknowledgement; never auto-resend
       a pending/unknown order under a new idempotency key.
+- [ ] For every timeout with a matching broker position, independently trace
+      the broker order/deal ID to the original intent before declaring a fill;
+      a shared `signal_id` or similar volume alone is insufficient.
 - [ ] Restart with an unresolved order and with open positions; accounts remain
       owned by the same workspace; no phantom position or duplicate entry.
 - [ ] Manual MT5 changes to SL/TP, manual close and partial close are detected
