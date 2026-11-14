@@ -164,13 +164,18 @@ class DealLedger:
         volume = sum((Decimal(str(r["volume"])) for r in openings), Decimal(0))
         target = Decimal(str(requested_volume))
         mismatch = any(r["symbol"] != symbol or r["side"] != side for r in rows)
+        position_ids = sorted({r["position_id"] for r in openings})
+        # One broker order spanning multiple position IDs needs independent
+        # account-mode/history reconciliation; never certify a simple fill.
         status = ("ambiguous_non_opening_deal" if non_opening else
-                  "mismatch" if mismatch or volume > target else "missing" if not openings
-                  else "full" if volume == target else "partial")
+                  "mismatch" if mismatch or volume > target else
+                  "ambiguous_multiple_positions" if len(position_ids) > 1 else
+                  "missing" if not openings else
+                  "full" if volume == target else "partial")
         return {"status": status, "volume": float(volume),
                 "deal_ids": [r["deal_id"] for r in openings],
                 "ignored_non_opening_ids": [r["deal_id"] for r in rows if r["entry"] != "in"],
-                "position_ids": sorted({r["position_id"] for r in openings}),
+                "position_ids": position_ids,
                 "average_price": (sum(r["price"] * r["volume"] for r in openings)
                                   / float(volume) if volume else None),
                 "attribution": "broker_order_id_match_only", "auto_resolved": False}
