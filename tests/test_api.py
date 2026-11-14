@@ -204,6 +204,9 @@ def test_closed_trade_review_shows_only_account_scoped_observed_candles(client, 
     assert [bar["t"] for bar in archived["bars"]] == [600]
     assert archived["bars"][0]["feed_mode"] == "simulated"
     assert archived["broker_tick_verified"] is False
+    assert archived["continuity"]["observed_bars"] == 1
+    assert archived["continuity"]["gaps"] == []
+    assert archived["continuity"]["complete"] is False
 
 
 def test_trade_history_is_scoped_to_active_broker_account(client, auth, runtime):
